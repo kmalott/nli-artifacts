@@ -1,0 +1,8 @@
+accelerate
+datasets
+torch
+tqdm
+transformers
+evaluate
+pandas
+numpy
