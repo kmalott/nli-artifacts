@@ -6,3 +6,4 @@ transformers
 evaluate
 pandas
 numpy
+ipykernel
