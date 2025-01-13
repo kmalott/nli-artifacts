@@ -3,6 +3,8 @@
 ### Repo Description
 This repo contains code for training debiased NLI models. In particular, it uses the technique of example reweighting from "link" to reweight the loss function for each training example based on how biased it is. The key advantage of this technique is that no knowledge of the types of bias contained in the data is needed to be able to use it to debias models. During the training process, the model will learn to avoid using simple strategies that work well a given dataset but fail to generalize to challenge datasets. 
 
+The code is written in python and uses a mixture of the huggingface and pytorch libraries.
+
 ### Getting Started
 Clone the repository:
 
