@@ -1,3 +1,5 @@
+# Acknowledgement: this file and helpers.py are heavily based on the github repo: https://github.com/gregdurrett/fp-dataset-artifacts
+
 import datasets
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, \
     AutoModelForQuestionAnswering, Trainer, TrainingArguments, HfArgumentParser
