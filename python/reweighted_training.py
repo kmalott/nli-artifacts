@@ -22,6 +22,14 @@ def prepare_dataset_nli_custom(examples, tokenizer, max_seq_length=None):
     tokenized_examples['predicted_scores'] = examples['predicted_scores']
     return tokenized_examples
 
+def example_reweighting_loss(p_d_ic, p_b_ic):
+    loss = -(1-p_b_ic)*p_d_ic.log()
+    return loss
+
+def product_of_expert_loss(p_d, p_b):
+    loss = -(torch.nn.functional.log_softmax((p_b.log() + p_d.log()), dim=1))
+    return loss
+
 def main():
     argp = HfArgumentParser(TrainingArguments)
     # Useful Arguments:
@@ -46,7 +54,11 @@ def main():
     argp.add_argument('--max_train_samples', type=int, default=None,
                       help='Limit the number of examples to train on.')
     argp.add_argument('--annealing', type=bool, default=False,
-                      help='This argument specifies if the annealing loss should be used or not.')
+                      help='This argument specifies if the loss should be annealed or not.')
+    argp.add_argument('--loss', type=str, choices=['exr', 'poe', 'cr'], required=True,
+                      help="""This argument specifies the loss function to be used. 
+                      Pass "exr" for the example reweighting loss function.
+                       Pass "poe" for the product of expert loss function.""")
 
     training_args, args = argp.parse_args_into_dataclasses()
 
@@ -115,36 +127,31 @@ def main():
     progress_bar = tqdm(range(int(num_training_steps)))
     model.train()
     if args.annealing:
-        #annealing parameter
-        a = 0.8
-        #timesteps
-        t = 0
+        a = 0.8 # annealing parameter
+        t = 0 # timesteps
     for epoch in range(int(num_epochs)):
         b = 0
         total_loss = 0
         for batch in dataloader:
-            predicted_scores = batch['predicted_scores']
+            logits_b = batch['predicted_scores']
             batch.pop('predicted_scores', None)
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
-            logits = outputs.logits
-            softmax = torch.nn.Softmax(dim=1)
-            probs = softmax(logits)
-            probs = probs.log()
-            predicted_probs = softmax(predicted_scores)
-            p_ic = torch.empty((predicted_probs.shape[0]))
-            p_d = torch.empty((predicted_probs.shape[0]))
+            p_d = torch.nn.functional.softmax(outputs.logits, dim=1)
+            p_b = torch.nn.functional.softmax(logits_b, dim=1)
+            # p_b_ic = torch.empty((p_b.shape[0]))
+            # p_d_ic = torch.empty((p_d.shape[0]))
             if args.annealing:
                 alpha_t = 1 - ((t*(1-a))/num_training_steps)
-                for i in range(0, predicted_probs.shape[0]):
-                    p_ic[i] = torch.pow(predicted_probs[i,batch['labels'][i]], alpha_t) / torch.sum(torch.pow(predicted_probs[i,:], alpha_t))
-                    p_d[i] = probs[i,batch['labels'][i]]
+                p_b = torch.pow(p_b, alpha_t) / torch.sum(torch.pow(p_b, alpha_t), dim=1)[:,None]
                 t += 1
-            else:
-                for i in range(0, predicted_probs.shape[0]):
-                    p_ic[i] = predicted_probs[i,batch['labels'][i]]
-                    p_d[i] = probs[i,batch['labels'][i]]
-            loss = -(1-p_ic)*p_d
+            if args.loss == 'exr':
+                p_b_ic = p_b[torch.arange(0, p_b.shape[0]), batch['labels']]
+                p_d_ic = p_d[torch.arange(0, p_d.shape[0]), batch['labels']]
+                loss = example_reweighting_loss(p_d_ic, p_b_ic)
+            elif args.loss == 'poe':
+                loss = product_of_expert_loss(p_d, p_b)
+                loss = loss[torch.arange(0, p_b.shape[0]), batch['labels']]
             loss = loss.mean()
             loss.backward()
             optimizer.step()
