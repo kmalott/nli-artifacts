@@ -46,16 +46,16 @@ def main():
 
     argp.add_argument('--model', type=str,
                       default='google/electra-small-discriminator',
-                      help='This argument specifies the base model to fine-tune.')
+                      help='This argument specifies the base model to fine-tune. Default is Electra-small')
     argp.add_argument('--dataset', type=str, default=None,
-                      help='This argument overrides the default dataset used for the specified task.')
+                      help='This argument specificies the dataset to be used. Pass in a .json or .jsonl file.')
     argp.add_argument('--max_length', type=int, default=128,
                       help='This argument limits the maximum sequence length used during training.')
     argp.add_argument('--max_train_samples', type=int, default=None,
                       help='Limit the number of examples to train on.')
     argp.add_argument('--annealing', type=bool, default=False,
                       help='This argument specifies if the loss should be annealed or not.')
-    argp.add_argument('--loss', type=str, choices=['exr', 'poe', 'cr'], required=True,
+    argp.add_argument('--loss', type=str, choices=['exr', 'poe'], required=True,
                       help="""This argument specifies the loss function to be used. 
                       Pass "exr" for the example reweighting loss function.
                        Pass "poe" for the product of expert loss function.""")
@@ -63,7 +63,6 @@ def main():
     training_args, args = argp.parse_args_into_dataclasses()
 
     # Dataset selection
-    # IMPORTANT: this code path allows you to load custom datasets different from SNLI.
     # You need to format the dataset appropriately. For NLI datasets, you can prepare a file with each line containing one
     # example as follows:
     # {"premise": "Two women are embracing.", "hypothesis": "The sisters are hugging.", "label": 1}
@@ -71,13 +70,14 @@ def main():
         dataset_id = None
         # Load from local json/jsonl file
         dataset = datasets.load_dataset('json', data_files=args.dataset)
+    else:
+        raise Exception("Dataset file type is not supported. Please use '.json' or '.ljson'")
     
     # NLI models need to have the output label count specified (label 0 is "entailed", 1 is "neutral", and 2 is "contradiction")
-    task_kwargs = {'num_labels': 3} if args.task == 'nli' else {}
+    task_kwargs = {'num_labels': 3}
 
-    # Here we select the right model fine-tuning head
-    model_class = AutoModelForSequenceClassification
     # Initialize the model and tokenizer from the specified pretrained model/checkpoint
+    model_class = AutoModelForSequenceClassification
     model = model_class.from_pretrained(args.model, **task_kwargs)
     if hasattr(model, 'electra'):
         for param in model.electra.parameters():
@@ -87,7 +87,6 @@ def main():
 
     # Select the dataset preprocessing function
     prepare_train_dataset = lambda exs: prepare_dataset_nli_custom(exs, tokenizer, args.max_length)
-
     print("Preprocessing data... (this takes a little bit, should only happen once per dataset)")
     train_dataset = None
     train_dataset_featurized = None
@@ -104,13 +103,13 @@ def main():
     train_dataset_featurized.set_format('torch')
     train_dataset_featurized = train_dataset_featurized.rename_column("label", "labels")
 
-    #load data with dataloader
+    # load data with dataloader
     batch_size = training_args.per_device_train_batch_size
     dataloader = DataLoader(
         train_dataset_featurized, batch_size = batch_size
     )
 
-    #initialize optimizer, scheduler
+    # initialize optimizer, scheduler
     optimizer = AdamW(model.parameters(), lr=5e-5)
     num_epochs = training_args.num_train_epochs
     num_training_steps = num_epochs * len(dataloader)
@@ -121,7 +120,7 @@ def main():
         num_training_steps=num_training_steps,
     )
     
-    #training loop
+    # training loop
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model.to(device)
     progress_bar = tqdm(range(int(num_training_steps)))
@@ -139,8 +138,6 @@ def main():
             outputs = model(**batch)
             p_d = torch.nn.functional.softmax(outputs.logits, dim=1)
             p_b = torch.nn.functional.softmax(logits_b, dim=1)
-            # p_b_ic = torch.empty((p_b.shape[0]))
-            # p_d_ic = torch.empty((p_d.shape[0]))
             if args.annealing:
                 alpha_t = 1 - ((t*(1-a))/num_training_steps)
                 p_b = torch.pow(p_b, alpha_t) / torch.sum(torch.pow(p_b, alpha_t), dim=1)[:,None]
@@ -162,7 +159,7 @@ def main():
             total_loss += loss
         print(f"Average loss on epoch {epoch}: {total_loss / b}")
 
-    #saving model
+    # saving model
     model.save_pretrained(training_args.output_dir, from_pt = True)
     tokenizer.save_vocabulary(training_args.output_dir)
     tokenizer.save_pretrained(training_args.output_dir)
